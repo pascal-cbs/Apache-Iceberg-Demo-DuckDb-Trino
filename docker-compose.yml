@@ -1,0 +1,54 @@
+# Lokale lakehouse-stack: S3-opslag (RustFS) + Iceberg REST-catalog + Trino
+services:
+  s3:
+    image: rustfs/rustfs:latest   # MinIO-compatibele S3-opslag (minio/minio staat niet meer op Docker Hub)
+    environment:
+      RUSTFS_ACCESS_KEY: admin
+      RUSTFS_SECRET_KEY: password
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ENABLE: "true"
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # web-console (admin / password)
+    volumes:
+      - s3-data:/data
+
+  s3-init:
+    image: amazon/aws-cli:latest
+    depends_on:
+      - s3
+    environment:
+      AWS_ACCESS_KEY_ID: admin
+      AWS_SECRET_ACCESS_KEY: password
+      AWS_DEFAULT_REGION: us-east-1
+    entrypoint: >
+      /bin/sh -c "for i in $$(seq 1 30); do
+        aws --endpoint-url http://s3:9000 s3 mb s3://warehouse && exit 0; sleep 2; done; exit 1"
+
+  rest:
+    image: apache/iceberg-rest-fixture:latest
+    depends_on:
+      s3-init:
+        condition: service_completed_successfully
+    environment:
+      AWS_ACCESS_KEY_ID: admin
+      AWS_SECRET_ACCESS_KEY: password
+      AWS_REGION: us-east-1
+      CATALOG_WAREHOUSE: s3://warehouse/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://s3:9000
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+    ports:
+      - "8181:8181"
+
+  trino:
+    image: trinodb/trino:476
+    depends_on:
+      - rest
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./trino/etc/catalog:/etc/trino/catalog:ro
+
+volumes:
+  s3-data:
